@@ -154,6 +154,8 @@ class Decoder(nn.Module):
 
 # Transformer模型
 class Transformer(nn.Module):
+    #vocab_size:词汇表大小 d_model:词嵌入纬度 n_head:多头数量 num_layers:编码与解码层数量
+    #d_ff:前馈神经网络隐藏层 max_seq_len：一句话里面词的最大长度
     def __init__(self, vocab_size, d_model, n_head, num_layers, d_ff, max_seq_len, dropout):
         super(Transformer, self).__init__()
         self.encoder = Encoder(vocab_size, d_model, n_head, num_layers, d_ff, max_seq_len, dropout)
