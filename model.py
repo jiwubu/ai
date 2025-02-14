@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import numpy as np
 
 # 位置编码
 class PositionalEncoding(nn.Module):
@@ -8,7 +7,7 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_seq_length, d_model)
         position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)  # (1, max_seq_length, d_model)
@@ -25,6 +24,8 @@ class MultiHeadAttention(nn.Module):
         self.d_model = d_model
         self.n_head = n_head
         self.head_dim = d_model // n_head
+        assert self.head_dim * n_head == d_model, "d_model must be divisible by n_head"
+
         self.q_linear = nn.Linear(d_model, d_model)
         self.k_linear = nn.Linear(d_model, d_model)
         self.v_linear = nn.Linear(d_model, d_model)
@@ -37,13 +38,17 @@ class MultiHeadAttention(nn.Module):
         q = self.q_linear(q).view(batch_size, -1, self.n_head, self.head_dim).transpose(1, 2)
         k = self.k_linear(k).view(batch_size, -1, self.n_head, self.head_dim).transpose(1, 2)
         v = self.v_linear(v).view(batch_size, -1, self.n_head, self.head_dim).transpose(1, 2)
+
         # 计算注意力分数
-        scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(self.head_dim)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
         if mask is not None:
+            mask = mask.unsqueeze(1).unsqueeze(2)  # (batch_size, 1, 1, seq_len)
             scores = scores.masked_fill(mask == 0, float('-inf'))
+
         # 注意力权重
         attn_weights = torch.softmax(scores, dim=-1)
         attn_weights = self.dropout(attn_weights)
+
         # 加权求和
         output = torch.matmul(attn_weights, v)
         output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
@@ -125,7 +130,7 @@ class Encoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, src, src_mask=None):
-        # 嵌入层 + 位置编码
+        assert src.dim() == 2, "src must be of shape (batch_size, seq_len)"
         src = self.embedding(src)
         src = self.positional_encoding(src)
         src = self.dropout(src)
@@ -144,7 +149,7 @@ class Decoder(nn.Module):
 
     #memory对应编码器侧encoder_output
     def forward(self, tgt, memory, tgt_mask=None, memory_mask=None):
-        # 嵌入层 + 位置编码
+        assert tgt.dim() == 2, "tgt must be of shape (batch_size, seq_len)"
         tgt = self.embedding(tgt)
         tgt = self.positional_encoding(tgt)
         tgt = self.dropout(tgt)
@@ -162,8 +167,18 @@ class Transformer(nn.Module):
         self.decoder = Decoder(vocab_size, d_model, n_head, num_layers, d_ff, max_seq_len, dropout)
         self.fc_out = nn.Linear(d_model, vocab_size)
 
+        # 参数初始化
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
     def forward(self, src, tgt, src_mask=None, tgt_mask=None):
         memory = self.encoder(src, src_mask)
         output = self.decoder(tgt, memory, tgt_mask)
         output = self.fc_out(output)
         return output
+
+    def predict(self, src, tgt, src_mask=None, tgt_mask=None):
+        # 推理时使用，返回概率分布
+        output = self(src, tgt, src_mask, tgt_mask)
+        return torch.softmax(output, dim=-1)

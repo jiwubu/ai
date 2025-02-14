@@ -43,26 +43,26 @@ class Vocab:
 
 class TextDataset(Dataset):
     """文本数据集类"""
-    def __init__(self, texts, vocab, max_seq_length):
+    def __init__(self, texts, vocab, max_seq_len):
         self.texts = texts
         self.vocab = vocab
-        self.max_seq_length = max_seq_length
+        self.max_seq_len = max_seq_len
 
     def __len__(self):
         return len(self.texts)
 
     def __getitem__(self, idx):
         text = self.texts[idx]
-        print(text)
-        tokens = text.split()[:self.max_seq_length - 2]  # 保留位置给起始/结束标记
+        tokens = text.split()[:self.max_seq_len - 2]  # 保留位置给起始/结束标记
+
         # 添加起始和结束标记
         tokens = ["<start>"] + tokens + ["<end>"]
         indices = self.vocab.lookup_indices(tokens)
 
         # 填充或截断
-        if len(indices) < self.max_seq_length:
-            indices += [self.vocab.pad_idx] * (self.max_seq_length - len(indices))
+        if len(indices) < self.max_seq_len:
+            indices += [self.vocab.pad_idx] * (self.max_seq_len - len(indices))
         else:
-            indices = indices[:self.max_seq_length]
+            indices = indices[:self.max_seq_len]
 
         return torch.tensor(indices, dtype=torch.long)

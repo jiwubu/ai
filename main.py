@@ -12,6 +12,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     """单个训练epoch"""
     model.train()
     total_loss = 0
+
     for batch in tqdm(dataloader, desc="Training"):
         src = batch.to(device)
         tgt = batch.to(device)
@@ -55,7 +56,7 @@ def generate_example(model, vocab, device, max_length=50):
     """生成示例文本"""
     model.eval()
     start_idx = vocab["performance"]
-    print("start_idx=", start_idx)
+
     generated = torch.tensor([[start_idx]], device=device)
 
     with torch.no_grad():
