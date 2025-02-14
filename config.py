@@ -3,7 +3,6 @@ import torch
 class Config:
     """全局配置参数"""
     csv_path = "wmt_zh_en_training_corpus.csv"
-    text_column = "text"
     train_ratio = 0.9
     max_seq_len = 100
     min_freq = 1

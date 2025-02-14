@@ -1,13 +1,12 @@
 import time
-
+import torch
 from torch import optim, nn
 from torch.utils.data import random_split, DataLoader
-from config import Config
-from data import Vocab, TextDataset
 from model import Transformer
-import torch
 from tqdm import tqdm
 import csv
+from config import Config
+from data import Vocab, TextDataset
 
 def train_epoch(model, dataloader, criterion, optimizer, device):
     """单个训练epoch"""
@@ -34,7 +33,6 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         total_loss += loss.item()
     return total_loss / len(dataloader)
 
-
 def evaluate(model, dataloader, criterion, device):
     """验证/测试函数"""
     model.eval()
@@ -52,7 +50,6 @@ def evaluate(model, dataloader, criterion, device):
                              tgt_output.reshape(-1))
             total_loss += loss.item()
     return total_loss / len(dataloader)
-
 
 def generate_example(model, vocab, device, max_length=50):
     """生成示例文本"""
@@ -108,10 +105,8 @@ def main():
     print("Building vocabulary...")
     vocab = Vocab.build_vocab(texts, config.vocab_size, config.min_freq)
 
-    for idx in tqdm(range(len(vocab))):
-        print(idx, vocab[idx])
-
-    print("vocab[performance]", vocab["performance"], vocab.lookup_indices(["performance"]))
+    print("vocab[performance]:", vocab["performance"], vocab.lookup_indices(["performance"]))
+    print("vocab[1,2,3,4,5,10]:", vocab.lookup_tokens([1,2,3,4,5,10]))
 
     # 准备数据集
     print("Preparing dataset...")

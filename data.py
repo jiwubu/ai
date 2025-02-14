@@ -1,8 +1,8 @@
-import pandas as pd
+import torch
 from torch.utils.data import Dataset
 from collections import Counter
+import pandas as pd
 from config import Config
-import torch
 
 # 分词词典类
 class Vocab:
@@ -19,10 +19,6 @@ class Vocab:
     def __getitem__(self, token):
         """获取token对应的index，未知词返回<unk>的index"""
         return self.token_to_idx.get(token, self.unk_idx)
-
-    # def __getitem__(self, idx):
-    #     """获取token对应的index，未知词返回<unk>的index"""
-    #     return self.idx_to_token.get(idx, self.unk_idx)
 
     def lookup_indices(self, tokens):
         return [self[token] for token in tokens]
