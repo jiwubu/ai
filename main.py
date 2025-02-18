@@ -4,11 +4,10 @@ from torch import optim, nn
 from torch.utils.data import random_split, DataLoader
 from model import Transformer
 from tqdm import tqdm
-import csv
 from config import Config
-from data import Vocab, TextDataset
+from data import Vocab, TextDataset, InputData
 
-def train_epoch(model, dataloader, criterion, optimizer, device):
+def train_epoch(model, dataloader, vocab, criterion, optimizer, device):
     """单个训练epoch"""
     model.train()
     total_loss = 0
@@ -17,18 +16,23 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         src = batch.to(device)
         tgt = batch.to(device)
 
-        # 准备decoder输入输出
-        tgt_input = tgt[:, :-1]
-        tgt_output = tgt[:, 1:]
+        # 源数据掩码（填充位置）
+        src_mask = (src != vocab.pad_idx).unsqueeze(1).unsqueeze(2)  # (batch, 1, 1, seq_len)
 
+        #目标数据掩码（填充掩码 + 因果掩码）
+        tgt_pad_mask = (tgt != vocab.pad_idx).unsqueeze(1).unsqueeze(2)   #(batch, seq_len)=>(batch, 1, 1, seq_len)
+        seq_len = tgt.size(1)
+        tgt_causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool().to(device)  # 因果掩码(seq_len, seq_len)
+        tgt_mask = tgt_pad_mask & tgt_causal_mask.unsqueeze(0)  # 组合掩码 (batch, 1, seq_len, seq_len)
+
+        #前向传播（使用tgt的前n-1个词预测后n-1个词）
+        outputs = model(src, tgt[:, :-1], src_mask=src_mask, tgt_mask=tgt_mask[:, :, :-1, :-1])
+        #计算损失
+        loss = criterion(outputs.view(-1, len(vocab)), tgt[:, 1:].contiguous().view(-1))
+
+        # 反向传播
         optimizer.zero_grad()
-        outputs = model(src, tgt_input)
-
-        # 计算损失
-        loss = criterion(outputs.reshape(-1, outputs.size(-1)),
-                         tgt_output.reshape(-1))
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
         total_loss += loss.item()
@@ -52,68 +56,23 @@ def evaluate(model, dataloader, criterion, device):
             total_loss += loss.item()
     return total_loss / len(dataloader)
 
-def generate_example(model, vocab, device, max_length=50):
-    """生成示例文本"""
-    model.eval()
-    start_idx = vocab["performance"]
-
-    generated = torch.tensor([[start_idx]], device=device)
-
-    with torch.no_grad():
-        for _ in range(max_length):
-            outputs = model(generated, generated)
-            logits = outputs[:, -1, :] / Config.temperature
-            top_k = torch.topk(logits, Config.top_k)
-            probs = torch.softmax(top_k.values, dim=-1)
-            next_token = top_k.indices[0, torch.multinomial(probs, 1).item()]
-
-            if next_token == vocab["<end>"]:
-                break
-
-            generated = torch.cat([generated, next_token.unsqueeze(0).unsqueeze(0)], dim=1)
-
-    indices = generated[0].cpu().numpy()
-    tokens = vocab.lookup_tokens(indices)
-    filtered = [t for t in tokens if t not in ["<pad>", "<start>", "<end>"]]
-    return " ".join(filtered)
-
-def parse_csv(file_path, max_rows=100):
-    data = []
-    try:
-        with open(file_path, mode='r', newline='', encoding='utf-8') as csvfile:
-            csv_reader = csv.reader(csvfile)
-            for i, row in enumerate(csv_reader):
-                if i >= max_rows:  # 如果达到最大行数，停止读取
-                    break
-                if i >= 1:
-                    data.append(row[1])
-
-    except FileNotFoundError:
-        print(f"文件 {file_path} 未找到")
-    except Exception as e:
-        print(f"解析CSV文件时发生错误: {e}")
-    return data
-
 def main():
     # 初始化配置
     config = Config()
 
-    # 加载数据
+    # 1. 准备示例数据
     print("Loading data...")
-    texts = parse_csv(config.csv_path, max_rows=10)
+    train_texts = InputData.read_data(config.csv_path, max_rows=10000)
 
-    # 构建词汇表
+    # 2. 构建词汇表
     print("Building vocabulary...")
-    vocab = Vocab.build_vocab(texts, config.vocab_size, config.min_freq)
+    vocab = Vocab.build_vocab(train_texts, config.vocab_size, config.min_freq)
 
-    print("vocab[performance]:", vocab["performance"], vocab.lookup_indices(["performance"]))
-    print("vocab[1,2,3,4,5,10]:", vocab.lookup_tokens([1,2,3,4,5,10]))
-
-    # 准备数据集
+    # 3. 创建数据集和数据加载器
     print("Preparing dataset...")
-    full_dataset = TextDataset(texts, vocab, config.max_seq_len)
+    full_dataset = TextDataset(train_texts, vocab, config.max_seq_len)
 
-    # 划分训练验证集
+    # 划分训练与验证集
     train_size = int(config.train_ratio * len(full_dataset))
     val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
@@ -121,7 +80,7 @@ def main():
     train_loader = DataLoader(train_dataset, config.batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, config.batch_size)
 
-    # 初始化模型
+    # 4. 初始化模型
     print("Initializing model...")
     print("------------------------------------------------------")
 
@@ -129,20 +88,18 @@ def main():
                         config.num_layers, config.d_ff, config.max_seq_len,
                         config.dropout).to(config.device)
 
-    # 设置训练组件
-    criterion = nn.CrossEntropyLoss(ignore_index=vocab["<pad>"])
+    # 5. 定义优化器和损失函数
+    criterion = nn.CrossEntropyLoss(ignore_index=vocab.pad_idx)
     optimizer = optim.Adam(model.parameters(), lr=config.lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
 
-    # 训练循环
+    # 6. 训练循环
     best_val_loss = float('inf')
     for epoch in range(config.epochs):
         start_time = time.time()
 
-        # 训练阶段
-        train_loss = train_epoch(model, train_loader, criterion, optimizer, config.device)
-
-        # 验证阶段
+        #开始训练
+        train_loss = train_epoch(model, train_loader, vocab, criterion, optimizer, config.device)
         val_loss = evaluate(model, val_loader, criterion, config.device)
         scheduler.step(val_loss)
 
@@ -155,24 +112,31 @@ def main():
         # 打印进度
         epoch_mins = (time.time() - start_time) // 60
         epoch_secs = int((time.time() - start_time) % 60)
+
         print(f"Epoch: {epoch + 1:02} | Time: {epoch_mins}m {epoch_secs}s")
         print(f"\tTrain Loss: {train_loss:.4f}")
         print(f"\t Val. Loss: {val_loss:.4f}")
         print(f"\tLearning Rate: {optimizer.param_groups[0]['lr']:.2e}")
         print("------------------------------------------------------")
 
-    # 生成示例文本
-    example = generate_example(model, vocab, config.device)
-    print("\nGenerated Example:")
-    print(example + "\n")
+    # 示例：生成文本
+    start_token = vocab["<how>"]
+    src = torch.tensor([[start_token]], device=config.device)  # 初始输入
 
-    print("------------------------------------------------------")
+    # 使用不同采样策略生成文本
+    print("Greedy decoding:")
+    print(model.generate(src, vocab, max_len=100, temperature=1.0, device=config.device))
 
-    # 最终测试
-    print("Training complete. Loading best model for final test...")
-    model.load_state_dict(torch.load(config.save_path))
-    final_loss = evaluate(model, val_loader, criterion, config.device)
-    print(f"Final Validation Loss: {final_loss:.4f}")
+    return
+
+    print("\nTemperature sampling (t=0.7):")
+    print(model.generate(src, vocab, max_len=20, temperature=0.7, device=config.device))
+
+    print("\nTop-k sampling (k=5):")
+    print(model.generate(src, vocab, max_len=20, top_k=5, device=config.device))
+
+    print("\nNucleus sampling (p=0.9):")
+    print(model.generate(src, vocab, max_len=20, top_p=0.9, device=config.device))
 
 if __name__ == "__main__":
     main()

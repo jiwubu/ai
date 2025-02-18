@@ -42,7 +42,6 @@ class MultiHeadAttention(nn.Module):
         # 计算注意力分数
         scores = torch.matmul(q, k.transpose(-2, -1)) / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
         if mask is not None:
-            mask = mask.unsqueeze(1).unsqueeze(2)  # (batch_size, 1, 1, seq_len)
             scores = scores.masked_fill(mask == 0, float('-inf'))
 
         # 注意力权重
@@ -174,7 +173,7 @@ class Transformer(nn.Module):
 
     def forward(self, src, tgt, src_mask=None, tgt_mask=None):
         memory = self.encoder(src, src_mask)
-        output = self.decoder(tgt, memory, tgt_mask)
+        output = self.decoder(tgt, memory, tgt_mask, src_mask)
         output = self.fc_out(output)
         return output
 
@@ -182,3 +181,96 @@ class Transformer(nn.Module):
         # 推理时使用，返回概率分布
         output = self(src, tgt, src_mask, tgt_mask)
         return torch.softmax(output, dim=-1)
+
+    def generate(self, src, vocab, max_len=50, temperature=1.0, top_k=0, top_p=0.0, device="cpu"):
+        """
+        生成文本序列
+        参数:
+            src: 源序列张量，形状 [1, src_len]
+            vocab: 词汇表对象
+            max_len: 最大生成长度
+            temperature: 温度参数（值越大输出越随机）
+            top_k: top-k采样参数（0表示禁用）
+            top_p: top-p采样参数（0.0表示禁用）
+            device: 使用的设备
+        返回:
+            生成的文本字符串
+        """
+        self.eval()
+        with torch.no_grad():
+            # 创建源序列掩码
+            src_mask = (src != vocab.pad_idx).unsqueeze(1).unsqueeze(2).to(device)
+            print("src_mask:", src_mask.size())
+
+            # 编码器前向传播
+            memory = self.encoder(src, src_mask)
+
+            # 初始化解码器输入（起始符）
+            tgt = torch.tensor([[vocab["<start>"]]], dtype=torch.long, device=device)
+
+            print("-----------------------开始生成-------------------------------")
+
+            for _ in range(max_len):
+                # 创建目标序列掩码（因果掩码）
+                tgt_len = tgt.size(1)
+                tgt_pad_mask = (tgt != vocab.pad_idx).unsqueeze(1).unsqueeze(2)
+                tgt_causal_mask = torch.tril(torch.ones(tgt_len, tgt_len, device=device)).bool()
+                tgt_mask = tgt_pad_mask & tgt_causal_mask.unsqueeze(0)
+
+                # 调用Decoder并应用fc_out
+                decoder_output = self.decoder(tgt, memory, tgt_mask=tgt_mask, memory_mask=src_mask)
+                output = self.fc_out(decoder_output)
+
+                # 获取最后一个位置的logits
+                next_logits = output[:, -1, :]
+
+                # 应用温度
+                next_logits = next_logits / temperature
+
+                # 处理采样策略
+                if top_k > 0:
+                    # Top-k采样
+                    top_k_values = torch.topk(next_logits, top_k, dim=-1).values
+                    min_values = top_k_values[:, -1].unsqueeze(-1)
+                    next_logits = torch.where(
+                        next_logits < min_values,
+                        torch.tensor(float('-inf')).to(device),
+                        next_logits
+                    )
+                elif top_p > 0.0:
+                    # Nucleus采样
+                    sorted_logits, sorted_indices = torch.sort(next_logits, descending=True)
+                    cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+
+                    # 移除累积概率超过p的token
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    # 保证至少保留一个token
+                    sorted_indices_to_remove[..., 0] = 0
+
+                    # 将需要移除的位置设为负无穷
+                    sorted_logits[sorted_indices_to_remove] = float('-inf')
+                    next_logits = sorted_logits.gather(-1, sorted_indices.argsort(-1))
+
+                # 计算概率分布
+                probs = torch.softmax(next_logits, dim=-1)
+
+                # 采样下一个token
+                next_token = torch.multinomial(probs, num_samples=1)
+
+                # 添加新token到目标序列
+                tgt = torch.cat([tgt, next_token], dim=1)
+
+                # 遇到结束符则停止生成
+                if next_token.item() == vocab["<end>"]:
+                    break
+
+            # 转换索引到token
+            generated_indices = tgt.squeeze().tolist()
+            generated_tokens = []
+            for idx in generated_indices:
+                if idx == vocab["<end>"]:
+                    break
+                if idx not in [vocab["<start>"], vocab["<pad>"]]:
+                    generated_tokens.append(vocab.idx_to_token[idx])
+
+            return " ".join(generated_tokens)

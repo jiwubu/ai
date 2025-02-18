@@ -1,3 +1,4 @@
+import csv
 import torch
 from torch.utils.data import Dataset
 from collections import Counter
@@ -66,3 +67,24 @@ class TextDataset(Dataset):
             indices = indices[:self.max_seq_len]
 
         return torch.tensor(indices, dtype=torch.long)
+
+class InputData:
+    @staticmethod
+    def read_data(file_path, max_rows=100):
+        texts = []
+
+        try:
+            with open(file_path, mode='r', newline='', encoding='utf-8') as csvfile:
+                csv_reader = csv.reader(csvfile)
+                for i, row in enumerate(csv_reader):
+                    if i >= max_rows:
+                        break
+                    if i >= 1:
+                        texts.append(row[1])
+
+        except FileNotFoundError:
+            print(f"{file_path} not found")
+        except Exception as e:
+            print(f"parse {file_path} failed: {e}")
+
+        return texts

@@ -4,7 +4,7 @@ class Config:
     """全局配置参数"""
     csv_path = "wmt_zh_en_training_corpus.csv"
     train_ratio = 0.9
-    max_seq_len = 128
+    max_seq_len = 128 #序列长度
     min_freq = 1
 
     # 模型参数
